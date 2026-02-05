@@ -1,17 +1,16 @@
+terraform {
+  required_version = ">= 1.0.0, < 2.0.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "6.31.0"
+    }
+  }
+}
+
 provider "aws" {
   region = "us-east-1"
-}
-
-variable "server_port" {
-  description = "Server port"
-  type        = number
-  default     = 8080
-}
-
-variable "lb_port" {
-  description = "Load Balancer port"
-  type        = number
-  default     = 80
 }
 
 data "aws_vpc" "default" {
@@ -69,6 +68,8 @@ resource "aws_autoscaling_group" "servers" {
   vpc_zone_identifier = data.aws_subnets.default.ids
 
   target_group_arns = [aws_lb_target_group.servers.arn]
+
+  health_check_type = "ELB"
 
   min_size = 2
   max_size = 10
@@ -168,9 +169,4 @@ resource "aws_lb_listener_rule" "forward_http" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.servers.arn
   }
-}
-
-output "alb_dns_name" {
-  value       = aws_lb.public.dns_name
-  description = "The domain name of the load balancer"
 }
