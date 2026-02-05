@@ -167,6 +167,11 @@ variable "alb_security_group_name" { ... }
 - **My implementation**: Uses `base64encode()` function
 - **Why**: Launch templates require base64-encoded user data
 
+### 11. **Instance AMI**
+- **Book's approach**: Hardcoded ami in the `launch_template` resource
+- **My implementation**: Use `aws_ami` data source to get the ID of the registered AMI 
+- **Why**: Always finds latest valid image and Works automatically per region
+
 ## Variables
 
 | Variable | Description | Type | Default |
