@@ -1,0 +1,183 @@
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+data "aws_ami" "ubuntu_2204" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+resource "aws_security_group" "instance" {
+  name = "terraform-example-instance"
+
+  ingress {
+    from_port       = var.server_port
+    to_port         = var.server_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+data "terraform_remote_state" "db" {
+  backend = "s3"
+
+  config = {
+    bucket = var.db_remote_state_bucket
+    key    = var.db_remote_state_key
+    region = "us-east-1"
+  }
+}
+
+resource "aws_launch_template" "example" {
+  name_prefix            = "example-lt-"
+  image_id               = data.aws_ami.ubuntu_2204.id
+  instance_type          = "t3.micro"
+  vpc_security_group_ids = [aws_security_group.instance.id]
+
+  user_data = base64encode(templatefile("user-data.tftpl",
+    {
+      server_port = var.server_port
+      db_address  = data.terraform_remote_state.db.outputs.address
+      db_port     = data.terraform_remote_state.db.outputs.port
+  }))
+
+  tags = {
+    Name = "terraform-example"
+  }
+}
+
+resource "aws_autoscaling_group" "servers" {
+  launch_template {
+    id      = aws_launch_template.example.id
+    version = "$Latest"
+  }
+  vpc_zone_identifier = data.aws_subnets.default.ids
+
+  target_group_arns = [aws_lb_target_group.servers.arn]
+
+  health_check_type = "ELB"
+
+  min_size = 2
+  max_size = 10
+
+  tag {
+    key                 = "Name"
+    value               = "terraform-asg-example"
+    propagate_at_launch = true
+  }
+
+}
+
+# Security Group
+
+resource "aws_security_group" "alb" {
+  name   = "terraform-example-alb"
+  vpc_id = data.aws_vpc.default.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_all" {
+  security_group_id = aws_security_group.alb.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+}
+
+
+resource "aws_vpc_security_group_ingress_rule" "allow_http" {
+  security_group_id = aws_security_group.alb.id
+  ip_protocol       = "tcp"
+  from_port         = var.lb_port
+  to_port           = var.lb_port
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+# End of Security Group
+
+resource "aws_lb" "public" {
+  name               = "example-dev-lb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = data.aws_subnets.default.ids
+
+  # enable_deletion_protection = true
+
+  tags = {
+    Environment = "production"
+  }
+}
+
+resource "aws_lb_target_group" "servers" {
+  name_prefix = "ex-tg-"
+
+  port     = var.server_port
+  protocol = "HTTP"
+
+  vpc_id = data.aws_vpc.default.id
+
+  health_check {
+    path                = "/"
+    protocol            = "HTTP"
+    matcher             = "200"
+    port                = var.server_port
+    interval            = 15
+    timeout             = 3
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+}
+
+resource "aws_lb_listener" "api_http" {
+  load_balancer_arn = aws_lb.public.arn
+  port              = var.lb_port
+  protocol          = "HTTP"
+
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "404: page not found"
+      status_code  = 404
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "forward_http" {
+  listener_arn = aws_lb_listener.api_http.arn
+  priority     = 100
+
+  condition {
+    path_pattern {
+      values = ["*"]
+    }
+  }
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.servers.arn
+  }
+}
