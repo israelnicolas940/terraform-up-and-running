@@ -30,7 +30,7 @@ data "aws_ami" "ubuntu_2204" {
 
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*"]
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
   }
 
   filter {
@@ -60,7 +60,7 @@ resource "aws_security_group" "instance" {
 resource "aws_launch_template" "example" {
   name_prefix            = "example-lt-"
   image_id               = data.aws_ami.ubuntu_2204.id
-  instance_type          = "t4g.micro"
+  instance_type          = "t3.micro"
   vpc_security_group_ids = [aws_security_group.instance.id]
 
   user_data = base64encode(<<-EOF
